@@ -1326,7 +1326,7 @@ _fetch_metrics() {
         echo "$_METRICS_CACHE"
         return 0
     fi
-    _METRICS_CACHE=$(curl -s --max-time 2 "http://127.0.0.1:${PROXY_METRICS_PORT:-9090}/metrics" 2>/dev/null)
+    _METRICS_CACHE=$(curl -s --max-time 2 "http://127.0.0.1:${PROXY_METRICS_PORT:-9090}/metrics" 2>/dev/null) || true
     _METRICS_CACHE_AGE=$now
     [ -n "$_METRICS_CACHE" ] && echo "$_METRICS_CACHE" && return 0
     return 1
@@ -5602,7 +5602,7 @@ telegram_send_message() {
         --data-urlencode "chat_id=${chat_id}" \
         --data-urlencode "text=${full_msg}" \
         --data-urlencode "parse_mode=Markdown" \
-        2>/dev/null)
+        2>/dev/null) || true
     local rc=$?
     rm -f "$_cfg"
     [ $rc -ne 0 ] && return 1
@@ -5629,7 +5629,7 @@ telegram_send_photo() {
         --data-urlencode "photo=${photo_url}" \
         --data-urlencode "caption=${caption}" \
         --data-urlencode "parse_mode=Markdown" \
-        >/dev/null 2>&1
+        >/dev/null 2>&1 || true
     local rc=$?
     rm -f "$_cfg"
     return $rc
@@ -5644,7 +5644,7 @@ telegram_get_chat_id() {
     _cfg=$(_mktemp) || return 1
     printf 'url = "https://api.telegram.org/bot%s/getUpdates"\n' "$token" > "$_cfg"
     local response
-    response=$(curl -s --max-time 10 -K "$_cfg" 2>/dev/null)
+    response=$(curl -s --max-time 10 -K "$_cfg" 2>/dev/null) || true
     rm -f "$_cfg"
 
     local chat_id
@@ -5744,7 +5744,7 @@ telegram_setup_wizard() {
     _cfg=$(_mktemp) || return 1
     printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "$token" > "$_cfg"
     local response
-    response=$(curl -s --max-time 10 -K "$_cfg" 2>/dev/null)
+    response=$(curl -s --max-time 10 -K "$_cfg" 2>/dev/null) || true
     rm -f "$_cfg"
     if ! echo "$response" | grep -q '"ok":true'; then
         log_error "Invalid token — bot not found"
@@ -6040,7 +6040,7 @@ save_traffic() {
 update_traffic() {
     # Fetch metrics once for both global and per-user stats
     local _metrics
-    _metrics=$(curl -s --max-time 2 "http://127.0.0.1:${PROXY_METRICS_PORT:-9090}/metrics" 2>/dev/null)
+    _metrics=$(curl -s --max-time 2 "http://127.0.0.1:${PROXY_METRICS_PORT:-9090}/metrics" 2>/dev/null) || true
     local cur_in cur_out
     if [ -n "$_metrics" ]; then
         cur_in=$(echo "$_metrics"|awk '/^telemt_user_octets_from_client\{/{s+=$NF}END{printf "%.0f",s}')
@@ -6100,7 +6100,7 @@ process_commands() {
     local updates
     updates=$(curl -s --max-time 30 \
         -K <(printf 'url = "https://api.telegram.org/bot%s/getUpdates?offset=%s&timeout=25"\n' "$TELEGRAM_BOT_TOKEN" "$offset") \
-        2>/dev/null)
+        2>/dev/null) || true
     [ -z "$updates" ] && return
 
     if command -v python3 &>/dev/null; then
@@ -6159,7 +6159,7 @@ _process_cmd() {
             local msg="📋 *Secrets*\n\n"
             # Single awk pass for all user metrics
             local _sec_metrics _parsed_users=""
-            _sec_metrics=$(curl -s --max-time 2 "http://127.0.0.1:${PROXY_METRICS_PORT:-9090}/metrics" 2>/dev/null)
+            _sec_metrics=$(curl -s --max-time 2 "http://127.0.0.1:${PROXY_METRICS_PORT:-9090}/metrics" 2>/dev/null) || true
             if [ -n "$_sec_metrics" ]; then
                 _parsed_users=$(echo "$_sec_metrics" | awk '
                     function lbl(s, k,    p, q) { p=index(s,k"=\""); if(!p) return ""; s=substr(s,p+length(k)+2); q=index(s,"\""); return q ? substr(s,1,q-1) : "" }
