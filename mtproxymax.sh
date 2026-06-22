@@ -104,6 +104,7 @@ PROXY_PORT=443
 PROXY_METRICS_PORT=9090
 PROXY_DOMAIN="cloudflare.com"
 PROXY_CONCURRENCY=8192
+CLIENT_MSS="tspu"
 PROXY_CPUS=""
 PROXY_MEMORY=""
 CUSTOM_IP=""
@@ -595,6 +596,7 @@ PROXY_PORT='${PROXY_PORT}'
 PROXY_METRICS_PORT='${PROXY_METRICS_PORT}'
 PROXY_DOMAIN='${PROXY_DOMAIN}'
 PROXY_CONCURRENCY='${PROXY_CONCURRENCY}'
+CLIENT_MSS='${CLIENT_MSS}'
 PROXY_CPUS='${PROXY_CPUS}'
 PROXY_MEMORY='${PROXY_MEMORY}'
 CUSTOM_IP='${CUSTOM_IP}'
@@ -675,7 +677,7 @@ load_settings() {
 
         # Whitelist of allowed keys
         case "$key" in
-            PROXY_PORT|PROXY_METRICS_PORT|PROXY_DOMAIN|PROXY_CONCURRENCY|\
+            PROXY_PORT|PROXY_METRICS_PORT|PROXY_DOMAIN|PROXY_CONCURRENCY|CLIENT_MSS|\
             PROXY_CPUS|PROXY_MEMORY|CUSTOM_IP|FAKE_CERT_LEN|PROXY_PROTOCOL|PROXY_PROTOCOL_TRUSTED_CIDRS|AD_TAG|GEOBLOCK_MODE|BLOCKLIST_COUNTRIES|\
             MASKING_ENABLED|MASKING_HOST|MASKING_PORT|MASKING_RELAY_MAX_BYTES|UNKNOWN_SNI_ACTION|\
             PROXY_SECRET_URL|PROXY_CONFIG_V4_URL|PROXY_CONFIG_V6_URL|\
@@ -1133,6 +1135,7 @@ $([ -n "$ad_tag" ] && echo "ad_tag = \"$ad_tag\"" || echo "# ad_tag = \"\"  # Ge
 $([ -n "${PROXY_SECRET_URL:-}" ] && echo "proxy_secret_url = \"${PROXY_SECRET_URL}\"")
 $([ -n "${PROXY_CONFIG_V4_URL:-}" ] && echo "proxy_config_v4_url = \"${PROXY_CONFIG_V4_URL}\"")
 $([ -n "${PROXY_CONFIG_V6_URL:-}" ] && echo "proxy_config_v6_url = \"${PROXY_CONFIG_V6_URL}\"")
+tg_connect = 10
 
 [general.modes]
 classic = false
@@ -1152,10 +1155,10 @@ proxy_protocol = ${PROXY_PROTOCOL:-false}
 $([ "$PROXY_PROTOCOL" = "true" ] && [ -n "$PROXY_PROTOCOL_TRUSTED_CIDRS" ] && echo "proxy_protocol_trusted_cidrs = [$(echo "$PROXY_PROTOCOL_TRUSTED_CIDRS" | sed 's/[[:space:]]*,[[:space:]]*/", "/g;s/^/"/;s/$/"/' )]")
 metrics_listen = "127.0.0.1:${metrics_port}"
 metrics_whitelist = ["127.0.0.1", "::1"]
+client_mss = "${CLIENT_MSS:-tspu}"
 
 [timeouts]
 client_handshake = 30
-tg_connect = 10
 client_keepalive = 15
 client_ack = 90
 
