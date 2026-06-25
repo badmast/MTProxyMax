@@ -5,7 +5,7 @@
     One script. Full control. Zero hassle.
   </p>
   <p align="center">
-    <img src="https://img.shields.io/badge/version-1.0.9-brightgreen" alt="Version"/>
+    <img src="https://img.shields.io/badge/version-1.0.10-brightgreen" alt="Version"/>
     <img src="https://img.shields.io/badge/license-MIT-blue" alt="License"/>
     <img src="https://img.shields.io/badge/engine-Rust_(telemt_3.x)-orange" alt="Engine"/>
     <img src="https://img.shields.io/badge/platform-Linux-lightgrey" alt="Platform"/>
@@ -408,6 +408,10 @@ mtproxymax secret unarchive <label>         # Restore from archive
 mtproxymax secret clone <src> <new>         # Duplicate with all limits
 mtproxymax secret bulk-extend <days>        # Extend all expiry dates
 mtproxymax secret disable-expired           # Auto-disable all expired secrets
+mtproxymax secret purge-disabled            # Permanently purge disabled/expired secrets
+mtproxymax secret sub                       # Generate Base64 subscription link feed
+mtproxymax secret export-json               # Export user database formatted as JSON
+mtproxymax secret rename-prefix <old> <new> # Bulk rename labels matching prefix
 ```
 
 ---
@@ -547,6 +551,18 @@ mtproxymax history 100        # Last 100 events
 mtproxymax speedtest
 ```
 
+**`digest`** displays an executive summary dashboard of uptime, sockets, traffic totals, and bot status:
+
+```bash
+mtproxymax digest
+```
+
+**`ping-dc`** benchmarks TCP handshake latency to global Telegram datacenters (DC1–DC5):
+
+```bash
+mtproxymax ping-dc
+```
+
 ---
 
 ### 🐚 Bash Completion
@@ -679,6 +695,8 @@ mtproxymax start                # Start proxy
 mtproxymax stop                 # Stop proxy
 mtproxymax restart              # Restart proxy
 mtproxymax status               # Show proxy status
+mtproxymax digest               # Executive summary report
+mtproxymax ping-dc              # Telegram DC latency benchmark
 mtproxymax menu                 # Open interactive TUI
 ```
 
@@ -706,6 +724,10 @@ mtproxymax secret disable-expired       # Disable all expired secrets
 mtproxymax secret link [label]          # Show proxy link
 mtproxymax secret qr [label]            # Show QR code
 mtproxymax secret generate-links [txt|html]  # Bulk export all links
+mtproxymax secret sub                   # Base64 subscription link feed
+mtproxymax secret export-json           # Export users as clean JSON
+mtproxymax secret purge-disabled        # Permanently purge disabled/expired
+mtproxymax secret rename-prefix <o> <n> # Bulk rename matching prefix
 mtproxymax secret note <label> [text]   # Attach notes/description
 mtproxymax secret logs <label> [lines]  # Per-user activity log
 ```
@@ -984,6 +1006,14 @@ mtproxymax update                       # Check for script + engine updates
 ---
 
 ## 📋 Changelog
+
+### v1.0.10 — Executive Digest, DC Latency Benchmark, Base64 Subscriptions & Bulk Tools
+
+- **Executive Digest (`mtproxymax digest`):** Instant ASCII summary board aggregating uptime, active socket counts, traffic totals, and Telegram bot daemon status
+- **Datacenter Benchmark (`mtproxymax ping-dc`):** Live TCP handshake latency test against Telegram global datacenters DC1 through DC5 with fastest-DC detection
+- **Base64 Subscriptions (`mtproxymax secret sub`):** Auto-generates standard Base64 proxy feeds compatible with third-party client auto-updaters
+- **JSON Export (`mtproxymax secret export-json`):** Full user database dump formatted as JSON for external integrations
+- **Cleanup & Bulk Tools:** Permanently purge disabled/expired records (`secret purge-disabled`) and bulk rename secret labels by prefix (`secret rename-prefix`)
 
 ### v1.0.9 — Engine v3.4.18, TLS Stealth, ME/MR Hardening ([#85](https://github.com/SamNet-dev/MTProxyMax/issues/85))
 
