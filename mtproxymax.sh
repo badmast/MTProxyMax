@@ -11,7 +11,7 @@ set -eo pipefail
 export LC_NUMERIC=C
 
 # ── Section 1: Initialization ────────────────────────────────
-VERSION="1.0.10"
+VERSION="1.1.0"
 SCRIPT_NAME="mtproxymax"
 INSTALL_DIR="/opt/mtproxymax"
 CONFIG_DIR="${INSTALL_DIR}/mtproxy"
@@ -132,6 +132,11 @@ TELEGRAM_INTERVAL=6
 TELEGRAM_ALERTS_ENABLED="true"
 TELEGRAM_SERVER_LABEL="MTProxyMax"
 AUTO_UPDATE_ENABLED="true"
+
+# Anti-DPI & Stealth Defenses
+STEALTH_SHIELD="false"
+STEALTH_PRESET="normal"
+STEALTH_MSS_CLAMP="false"
 
 # Auto-rotate and backup retention (v1.0.7)
 SECRET_AUTO_ROTATE_DAYS="0"     # 0 = disabled; otherwise rotate secrets older than N days
@@ -570,12 +575,19 @@ parse_human_bytes() {
     esac
 }
 
-# Validate a domain name (reject TOML/shell-unsafe characters)
+# Validate a domain name or comma-separated domain pool
 validate_domain() {
     local d="$1"
     [ -z "$d" ] && return 1
-    # Only allow valid hostname chars: letters, digits, dots, hyphens
-    [[ "$d" =~ ^[a-zA-Z0-9.-]+$ ]] && [[ "$d" =~ \. ]]
+    local part
+    IFS=',' read -ra parts <<< "$d"
+    for part in "${parts[@]}"; do
+        part="${part// /}"
+        if ! [[ "$part" =~ ^[a-zA-Z0-9.-]+$ ]] || ! [[ "$part" =~ \. ]]; then
+            return 1
+        fi
+    done
+    return 0
 }
 
 # Detect remote TLS certificate DER payload length using openssl
@@ -610,7 +622,9 @@ sync_domain_cert_len() {
     fi
 
     local detected
-    if detected=$(detect_remote_cert_len "$PROXY_DOMAIN"); then
+    local first_domain="${PROXY_DOMAIN%%,*}"
+    first_domain="${first_domain// /}"
+    if detected=$(detect_remote_cert_len "$first_domain"); then
         mkdir -p "$INSTALL_DIR" 2>/dev/null || true
         echo "$now_s" > "$stamp_file" 2>/dev/null || true
         if [ "$detected" != "${FAKE_CERT_LEN:-2048}" ]; then
@@ -687,6 +701,11 @@ AUTO_UPDATE_ENABLED='${AUTO_UPDATE_ENABLED}'
 SECRET_AUTO_ROTATE_DAYS='${SECRET_AUTO_ROTATE_DAYS}'
 BACKUP_RETENTION_DAYS='${BACKUP_RETENTION_DAYS}'
 
+# Anti-DPI & Stealth Defenses
+STEALTH_SHIELD='${STEALTH_SHIELD}'
+STEALTH_PRESET='${STEALTH_PRESET}'
+STEALTH_MSS_CLAMP='${STEALTH_MSS_CLAMP}'
+
 # Replication / HA
 REPLICATION_ENABLED='${REPLICATION_ENABLED}'
 REPLICATION_ROLE='${REPLICATION_ROLE}'
@@ -733,6 +752,7 @@ load_settings() {
             TELEGRAM_ENABLED|TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|\
             TELEGRAM_INTERVAL|TELEGRAM_ALERTS_ENABLED|TELEGRAM_SERVER_LABEL|\
             AUTO_UPDATE_ENABLED|SECRET_AUTO_ROTATE_DAYS|BACKUP_RETENTION_DAYS|\
+            STEALTH_SHIELD|STEALTH_PRESET|STEALTH_MSS_CLAMP|\
             REPLICATION_ENABLED|REPLICATION_ROLE|REPLICATION_SYNC_INTERVAL|\
             REPLICATION_SSH_PORT|REPLICATION_SSH_USER|REPLICATION_DELETE_EXTRA|REPLICATION_SSH_KEY_PATH|REPLICATION_EXCLUDE|\
             REPLICATION_RESTART_ON_CHANGE|REPLICATION_LOG)
@@ -761,6 +781,11 @@ load_settings() {
     [[ "$REPLICATION_DELETE_EXTRA" == "false" ]] || REPLICATION_DELETE_EXTRA="true"
     [[ "$REPLICATION_ENABLED" == "true" ]] || REPLICATION_ENABLED="false"
     [[ "$REPLICATION_RESTART_ON_CHANGE" == "false" ]] || REPLICATION_RESTART_ON_CHANGE="true"
+
+    # Stealth validation
+    [[ "$STEALTH_SHIELD" == "true" ]] || STEALTH_SHIELD="false"
+    [[ "$STEALTH_PRESET" =~ ^(ultra|normal)$ ]] || STEALTH_PRESET="normal"
+    [[ "$STEALTH_MSS_CLAMP" == "true" ]] || STEALTH_MSS_CLAMP="false"
 
     # Migration: ensure settings.conf and replication.conf are always excluded
     [[ "$REPLICATION_EXCLUDE" == *"settings.conf"* ]]   || REPLICATION_EXCLUDE="${REPLICATION_EXCLUDE},settings.conf"
@@ -1159,13 +1184,33 @@ generate_telemt_config() {
     mkdir -p "$CONFIG_DIR"
     chmod 700 "$CONFIG_DIR"
 
-    local domain="${PROXY_DOMAIN:-cloudflare.com}"
+    local raw_domain="${PROXY_DOMAIN:-cloudflare.com}"
+    local domain="${raw_domain%%,*}"
+    domain="${domain// /}"
     local mask_enabled="${MASKING_ENABLED:-true}"
     local mask_host="${MASKING_HOST:-$domain}"
     local mask_port="${MASKING_PORT:-443}"
     local ad_tag="${AD_TAG:-}"
     local port="${PROXY_PORT:-443}"
     local metrics_port="${PROXY_METRICS_PORT:-9090}"
+
+    local domains_toml=""
+    if [[ "$raw_domain" == *","* ]]; then
+        local part
+        IFS=',' read -ra _dparts <<< "$raw_domain"
+        local _dlist=""
+        for part in "${_dparts[@]}"; do
+            part="${part// /}"
+            [ -n "$part" ] && _dlist="${_dlist:+$_dlist, }\"${part}\""
+        done
+        [ -n "$_dlist" ] && domains_toml="tls_domains = [${_dlist}]"
+    fi
+
+    local r_check=65536 r_win=1800
+    if [ "${STEALTH_PRESET:-normal}" = "ultra" ]; then
+        r_check=131072
+        r_win=180
+    fi
 
     # Build config in a temp file for atomic write (same-dir for atomic mv)
     local tmp
@@ -1213,6 +1258,7 @@ client_ack = 90
 
 [censorship]
 tls_domain = "${domain}"
+$([ -n "${domains_toml}" ] && echo "${domains_toml}")
 unknown_sni_action = "${UNKNOWN_SNI_ACTION:-mask}"
 mask = ${mask_enabled}
 mask_port = ${mask_port}
@@ -1223,8 +1269,8 @@ fake_cert_len = ${FAKE_CERT_LEN:-2048}
 # not via telemt config. See: mtproxymax info -> Geo-Blocking
 
 [access]
-replay_check_len = 65536
-replay_window_secs = 1800
+replay_check_len = ${r_check}
+replay_window_secs = ${r_win}
 ignore_time_skew = false
 
 [access.users]
@@ -4474,7 +4520,7 @@ _mtproxymax_completion() {
 
     # Top-level commands
     if [ "$COMP_CWORD" -eq 1 ]; then
-        local cmds="start stop restart status menu install uninstall secret upstream port ip domain mask-backend mask-relay-bytes tg-urls adtag traffic connections metrics logs health doctor info maintenance ban unban bans migrate changelog backup restore backups config uptime notify port-check profile auto-rotate template sweep tune verify history completion speedtest telegram replication rebuild update engine geoblock sni-policy digest ping-dc"
+        local cmds="start stop restart status menu install uninstall secret upstream port ip domain mask-backend mask-relay-bytes tg-urls adtag traffic connections metrics logs health doctor info maintenance ban unban bans migrate changelog backup restore backups config uptime notify port-check profile auto-rotate template sweep tune verify history completion speedtest telegram replication rebuild update engine geoblock sni-policy digest ping-dc shield stealth clamp-mss domain-pool"
         COMPREPLY=( $(compgen -W "${cmds}" -- "${cur}") )
         return 0
     fi
@@ -4518,6 +4564,15 @@ _mtproxymax_completion() {
             ;;
         replication)
             [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=( $(compgen -W "setup status add remove list enable disable sync test logs reset promote" -- "${cur}") )
+            ;;
+        shield|clamp-mss)
+            [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=( $(compgen -W "on off status" -- "${cur}") )
+            ;;
+        stealth)
+            [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=( $(compgen -W "ultra normal status" -- "${cur}") )
+            ;;
+        domain-pool)
+            [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=( $(compgen -W "get" -- "${cur}") )
             ;;
     esac
     return 0
@@ -4631,6 +4686,162 @@ run_ping_dc() {
         echo -e "  🏆 ${BOLD}Fastest DC:${NC} ${CYAN}${best_dc}${NC}"
         echo ""
     fi
+}
+
+# Apply or clean up kernel firewall anti-DPI rules
+apply_firewall_rules() {
+    [ -z "${PROXY_PORT:-}" ] && return 0
+    if command -v iptables >/dev/null 2>&1; then
+        while iptables -D INPUT -p tcp --dport "${PROXY_PORT}" -m conntrack --ctstate NEW -m recent --set --name mtproxy_syn 2>/dev/null; do :; done
+        while iptables -D INPUT -p tcp --dport "${PROXY_PORT}" -m conntrack --ctstate NEW -m recent --update --seconds 5 --hitcount 15 --name mtproxy_syn -j DROP 2>/dev/null; do :; done
+        while iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN --dport "${PROXY_PORT}" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do :; done
+        while iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN --sport "${PROXY_PORT}" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do :; done
+    fi
+
+    if [ "${STEALTH_SHIELD:-false}" = "true" ] && command -v iptables >/dev/null 2>&1; then
+        iptables -I INPUT 1 -p tcp --dport "${PROXY_PORT}" -m conntrack --ctstate NEW -m recent --set --name mtproxy_syn 2>/dev/null || true
+        iptables -I INPUT 2 -p tcp --dport "${PROXY_PORT}" -m conntrack --ctstate NEW -m recent --update --seconds 5 --hitcount 15 --name mtproxy_syn -j DROP 2>/dev/null || true
+    fi
+
+    if [ "${STEALTH_MSS_CLAMP:-false}" = "true" ] && command -v iptables >/dev/null 2>&1; then
+        iptables -t mangle -I FORWARD 1 -p tcp --tcp-flags SYN,RST SYN --dport "${PROXY_PORT}" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+        iptables -t mangle -I FORWARD 2 -p tcp --tcp-flags SYN,RST SYN --sport "${PROXY_PORT}" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+    fi
+}
+
+run_shield() {
+    load_settings
+    local action="${1:-status}"
+    case "$action" in
+        on|enable|true|1)
+            check_root
+            STEALTH_SHIELD="true"
+            save_settings
+            apply_firewall_rules
+            log_success "Kernel SYN Shield enabled (>15 SYN/5s tarpit on port ${PROXY_PORT})"
+            ;;
+        off|disable|false|0)
+            check_root
+            STEALTH_SHIELD="false"
+            save_settings
+            apply_firewall_rules
+            log_success "Kernel SYN Shield disabled"
+            ;;
+        status)
+            echo -e "\n  🛡️  ${BOLD}Kernel SYN Shield Status:${NC}"
+            if [ "${STEALTH_SHIELD:-false}" = "true" ]; then
+                echo -e "     Status: ${GREEN}ENABLED${NC} (Active protection on port ${PROXY_PORT})"
+            else
+                echo -e "     Status: ${YELLOW}DISABLED${NC}"
+            fi
+            echo ""
+            ;;
+        *)
+            log_error "Usage: mtproxymax shield [on|off|status]"
+            return 1
+            ;;
+    esac
+}
+
+run_clamp_mss() {
+    load_settings
+    local action="${1:-status}"
+    case "$action" in
+        on|enable|true|1)
+            check_root
+            STEALTH_MSS_CLAMP="true"
+            save_settings
+            apply_firewall_rules
+            log_success "TCP MSS Clamping enabled on port ${PROXY_PORT}"
+            ;;
+        off|disable|false|0)
+            check_root
+            STEALTH_MSS_CLAMP="false"
+            save_settings
+            apply_firewall_rules
+            log_success "TCP MSS Clamping disabled"
+            ;;
+        status)
+            echo -e "\n  📉 ${BOLD}TCP MSS Clamping Status:${NC}"
+            if [ "${STEALTH_MSS_CLAMP:-false}" = "true" ]; then
+                echo -e "     Status: ${GREEN}ENABLED${NC} (Active alignment on port ${PROXY_PORT})"
+            else
+                echo -e "     Status: ${YELLOW}DISABLED${NC}"
+            fi
+            echo ""
+            ;;
+        *)
+            log_error "Usage: mtproxymax clamp-mss [on|off|status]"
+            return 1
+            ;;
+    esac
+}
+
+run_stealth_preset() {
+    load_settings
+    local preset="${1:-status}"
+    case "$preset" in
+        ultra|high|max)
+            check_root
+            STEALTH_PRESET="ultra"
+            UNKNOWN_SNI_ACTION="drop"
+            save_settings
+            log_success "Stealth preset set to ULTRA (Replay window: 180s, Cache: 131072, Unknown SNI: drop)"
+            if is_proxy_running; then reload_proxy_config; fi
+            ;;
+        normal|standard|default)
+            check_root
+            STEALTH_PRESET="normal"
+            UNKNOWN_SNI_ACTION="mask"
+            save_settings
+            log_success "Stealth preset set to NORMAL (Replay window: 1800s, Cache: 65536, Unknown SNI: mask)"
+            if is_proxy_running; then reload_proxy_config; fi
+            ;;
+        status)
+            echo -e "\n  🥷 ${BOLD}Stealth Defense Preset:${NC}"
+            if [ "${STEALTH_PRESET:-normal}" = "ultra" ]; then
+                echo -e "     Current Preset: ${RED}${BOLD}ULTRA STEALTH${NC}"
+                echo -e "     Replay Window:  180 seconds"
+                echo -e "     Replay Cache:   131,072 entries"
+                echo -e "     Unknown SNI:    Drop connection"
+            else
+                echo -e "     Current Preset: ${GREEN}NORMAL${NC}"
+                echo -e "     Replay Window:  1800 seconds"
+                echo -e "     Replay Cache:   65,536 entries"
+                echo -e "     Unknown SNI:    Mask traffic to cover domain"
+            fi
+            echo ""
+            ;;
+        *)
+            log_error "Usage: mtproxymax stealth [ultra|normal|status]"
+            return 1
+            ;;
+    esac
+}
+
+run_domain_pool() {
+    load_settings
+    local pool="$1"
+    case "$pool" in
+        ""|get)
+            echo -e "\n  🔀 ${BOLD}Multi-Domain SNI Pool:${NC}"
+            echo -e "     Current Pool: ${CYAN}${PROXY_DOMAIN:-<not set>}${NC}"
+            echo ""
+            ;;
+        *)
+            check_root
+            if validate_domain "$pool"; then
+                PROXY_DOMAIN="$pool"
+                sync_domain_cert_len "true" "false" || true
+                save_settings
+                log_success "Domain pool updated: ${pool}"
+                if is_proxy_running; then reload_proxy_config; fi
+            else
+                log_error "Invalid domain pool format (use e.g. cloudflare.com,www.microsoft.com)"
+                return 1
+            fi
+            ;;
+    esac
 }
 
 # ── Show changelog since installed version ──
@@ -5150,6 +5361,7 @@ start_proxy_container() {
     run_proxy_container
     # Also start secondary instances
     _start_all_instances 2>/dev/null
+    apply_firewall_rules 2>/dev/null || true
 }
 
 restart_proxy_container() {
@@ -5157,6 +5369,7 @@ restart_proxy_container() {
     docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
     run_proxy_container
     _start_all_instances 2>/dev/null
+    apply_firewall_rules 2>/dev/null || true
 }
 
 # Hot-reload: rewrite config.toml and let the engine pick it up (no restart, no dropped connections)
@@ -8271,7 +8484,6 @@ show_cli_help() {
     echo -e "    ${GREEN}secret limits${NC} [label]   Show user limits"
     echo -e "    ${GREEN}secret setlimit${NC} <label> conns|ips|quota|expires <value> [--no-restart]"
     echo -e "    ${GREEN}secret setlimits${NC} <label> <conns> <ips> <quota> [expires] [--no-restart]"
-    echo -e "    ${GREEN}secret reset-traffic${NC} <label|all>  Reset traffic counters"
     echo -e "    ${GREEN}secret rename${NC} <old> <new>     Rename a secret"
     echo -e "    ${GREEN}secret clone${NC} <src> <new>      Clone a secret with all its limits"
     echo -e "    ${GREEN}secret bulk-extend${NC} <days>     Extend all secrets' expiry by N days"
@@ -8311,6 +8523,10 @@ show_cli_help() {
     echo -e "    ${GREEN}port${NC} [get|<number>]       Show or change proxy port"
     echo -e "    ${GREEN}ip${NC} [get|auto|<address>]   Show, reset, or set custom IP/domain for links"
     echo -e "    ${GREEN}domain${NC} [get|clear|<host>] Show, clear, or change FakeTLS domain"
+    echo -e "    ${GREEN}domain-pool${NC} [get|<pool>] Configure multi-domain SNI pool (comma-separated)"
+    echo -e "    ${GREEN}shield${NC} [on|off|status]    Kernel SYN Shield rate limiter (>15 SYN/5s tarpit)"
+    echo -e "    ${GREEN}stealth${NC} [ultra|normal|status]  Switch stealth defense preset (anti-replay tuning)"
+    echo -e "    ${GREEN}clamp-mss${NC} [on|off|status] Toggle TCP MSS Clamping (--clamp-mss-to-pmtu)"
     echo -e "    ${GREEN}mask-backend${NC} [host:port]  Show or set mask backend for non-proxy traffic"
     echo -e "    ${GREEN}mask-relay-bytes${NC} [N|0|clear]  Max bytes per direction on mask relay (0=unlimited)"
     echo -e "    ${GREEN}tg-urls${NC} [get|set <field> <url>|clear]  Custom Telegram infrastructure URLs (restricted regions)"
@@ -9218,6 +9434,26 @@ cli_main() {
             run_ping_dc
             ;;
 
+        shield)
+            shift
+            run_shield "$@"
+            ;;
+
+        stealth)
+            shift
+            run_stealth_preset "$@"
+            ;;
+
+        clamp-mss)
+            shift
+            run_clamp_mss "$@"
+            ;;
+
+        domain-pool)
+            shift
+            run_domain_pool "$@"
+            ;;
+
         tg-urls)
             load_settings
             load_secrets
@@ -9817,6 +10053,60 @@ cli_main() {
 
 # ── Section 18: Interactive TUI Menus ───────────────────────
 
+show_stealth_menu() {
+    while true; do
+        clear_screen
+        draw_header "ANTI-DPI & STEALTH DEFENSES"
+        echo ""
+        echo -e "  ${BOLD}Kernel SYN Shield:${NC}     $([ "${STEALTH_SHIELD:-false}" = "true" ] && echo "${GREEN}ENABLED${NC}" || echo "${YELLOW}DISABLED${NC}")"
+        echo -e "  ${BOLD}Stealth Preset:${NC}        $([ "${STEALTH_PRESET:-normal}" = "ultra" ] && echo "${RED}${BOLD}ULTRA${NC}" || echo "${GREEN}NORMAL${NC}")"
+        echo -e "  ${BOLD}TCP MSS Clamping:${NC}      $([ "${STEALTH_MSS_CLAMP:-false}" = "true" ] && echo "${GREEN}ENABLED${NC}" || echo "${YELLOW}DISABLED${NC}")"
+        echo -e "  ${BOLD}Domain SNI Pool:${NC}       ${CYAN}${PROXY_DOMAIN:-not set}${NC}"
+        echo ""
+        echo -e "  ${DIM}[1]${NC} Toggle Kernel SYN Shield (>15 SYN/5s tarpit)"
+        echo -e "  ${DIM}[2]${NC} Switch Stealth Preset (Normal vs Ultra anti-replay)"
+        echo -e "  ${DIM}[3]${NC} Toggle TCP MSS Clamping (--clamp-mss-to-pmtu)"
+        echo -e "  ${DIM}[4]${NC} Configure Multi-Domain SNI Pool"
+        echo -e "  ${DIM}[0]${NC} Back"
+
+        local choice
+        choice=$(read_choice "Choice" "0")
+        case "$choice" in
+            1)
+                if [ "${STEALTH_SHIELD:-false}" = "true" ]; then
+                    run_shield off
+                else
+                    run_shield on
+                fi
+                press_any_key
+                ;;
+            2)
+                if [ "${STEALTH_PRESET:-normal}" = "ultra" ]; then
+                    run_stealth_preset normal
+                else
+                    run_stealth_preset ultra
+                fi
+                press_any_key
+                ;;
+            3)
+                if [ "${STEALTH_MSS_CLAMP:-false}" = "true" ]; then
+                    run_clamp_mss off
+                else
+                    run_clamp_mss on
+                fi
+                press_any_key
+                ;;
+            4)
+                echo -en "  ${BOLD}Enter cover domain pool (comma-separated):${NC} "
+                local dp; read -r dp
+                [ -n "$dp" ] && { run_domain_pool "$dp"; press_any_key; }
+                ;;
+            0|q|Q|"") return ;;
+            *) ;;
+        esac
+    done
+}
+
 show_security_menu() {
     while true; do
         clear_screen
@@ -9832,6 +10122,7 @@ show_security_menu() {
         echo -e "  ${DIM}[2]${NC} Proxy Chaining (Upstreams)"
         echo -e "  ${DIM}[3]${NC} Unknown SNI Policy: ${sni_label}"
         echo -e "  ${DIM}[4]${NC} IP Banlist"
+        echo -e "  ${DIM}[5]${NC} Anti-DPI & Stealth Defenses"
         echo -e "  ${DIM}[0]${NC} Back"
 
         local choice
@@ -9878,6 +10169,7 @@ show_security_menu() {
                 esac
                 press_any_key
                 ;;
+            5) show_stealth_menu ;;
             0|"") return ;;
             *) ;;
         esac
@@ -10683,6 +10975,7 @@ show_settings_menu() {
         echo -e "  ${DIM}[r]${NC} Config profiles"
         echo -e "  ${DIM}[u]${NC} Custom Telegram URLs (restricted regions)"
         echo -e "  ${DIM}[A]${NC} Auto-rotate policy (current: ${SECRET_AUTO_ROTATE_DAYS:-0}d)"
+        echo -e "  ${DIM}[s]${NC} Anti-DPI & Stealth Defenses"
         echo -e "  ${DIM}[n]${NC} Engine tuning (advanced)"
         echo -e "  ${DIM}[0]${NC} Back"
 
@@ -11057,6 +11350,7 @@ show_settings_menu() {
                 fi
                 press_any_key
                 ;;
+            s|S) show_stealth_menu ;;
             0|"") return ;;
             *) ;;
         esac

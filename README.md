@@ -5,7 +5,7 @@
     One script. Full control. Zero hassle.
   </p>
   <p align="center">
-    <img src="https://img.shields.io/badge/version-1.0.10-brightgreen" alt="Version"/>
+    <img src="https://img.shields.io/badge/version-1.1.0-brightgreen" alt="Version"/>
     <img src="https://img.shields.io/badge/license-MIT-blue" alt="License"/>
     <img src="https://img.shields.io/badge/engine-Rust_(telemt_3.x)-orange" alt="Engine"/>
     <img src="https://img.shields.io/badge/platform-Linux-lightgrey" alt="Platform"/>
@@ -86,13 +86,17 @@ mtproxymax status    # Check proxy health
 
 ## ✨ Features
 
-### 🛡️ FakeTLS V2 Obfuscation
+### 🛡️ FakeTLS V2 & Advanced Anti-DPI Defenses
 
-Your proxy traffic looks identical to normal HTTPS traffic. The **Fake TLS V2** engine mirrors real TLS 1.3 sessions — per-domain profiles, real cipher suites, dynamic certificate lengths, and realistic record fragmentation. The TLS handshake SNI points to a cover domain (e.g., `cloudflare.com`), making it indistinguishable from regular web browsing to any DPI system.
+Your proxy traffic looks identical to normal HTTPS traffic. The **Fake TLS V2** engine mirrors real TLS 1.3 sessions — per-domain profiles, real cipher suites, dynamic certificate lengths, and realistic record fragmentation.
 
-- **Auto Certificate Length Sync:** MTProxyMax automatically connects to your configured cover domain (`tls_domain`) every 24 hours via OpenSSL, measures the actual live DER certificate payload size, and dynamically synchronizes `fake_cert_len`. This completely prevents advanced DPI active heuristics from fingerprinting your proxy based on static certificate sizes.
+- **Multi-Domain SNI Pool (`tls_domains`):** Rotate between multiple high-reputation cover domains (e.g., `cloudflare.com,www.microsoft.com,www.google.com`) within the same proxy engine instance to evade single-domain DPI throttling and SNI blacklisting.
+- **Kernel SYN Shield:** Built-in iptables/nftables rate limiter (`conntrack` + `recent` module) that tarpits aggressive DPI active scanners (>15 SYN packets in 5 seconds per IP) before they reach the application layer.
+- **Stealth Presets (`normal` vs `ultra`):** Hot-swappable anti-replay hardening. `ultra` tightens the replay window to 180 seconds, expands the nonce cache to 131,072 entries, and drops unknown SNI probes immediately.
+- **TCP MSS Clamping:** Prevents MTU black hole drops and packet fragmentation by aligning TCP Maximum Segment Size `--clamp-mss-to-pmtu`.
+- **Auto Certificate Length Sync:** MTProxyMax automatically connects to your configured cover domain (`tls_domain`) every 24 hours via OpenSSL, measures the actual live DER certificate payload size, and dynamically synchronizes `fake_cert_len`.
 
-**Traffic masking** goes further — when a non-Telegram client probes your server, the connection is forwarded to the real cover domain. Your server responds exactly like cloudflare.com would.
+**Traffic masking** goes further — when a non-Telegram client probes your server on normal preset, the connection is forwarded to the real cover domain. Your server responds exactly like cloudflare.com would.
 
 ---
 
@@ -1008,6 +1012,14 @@ mtproxymax update                       # Check for script + engine updates
 ---
 
 ## 📋 Changelog
+
+### v1.1.0 — Anti-DPI & Stealth Defenses Expansion
+
+- **Kernel SYN Shield (`mtproxymax shield`):** Built-in iptables/nftables rate limiter (`conntrack` + `recent` module) that tarpits aggressive active probes (>15 SYN/5s per IP) before they reach application layer memory.
+- **Stealth Presets (`mtproxymax stealth`):** Hot-swappable anti-replay hardening (`normal` vs `ultra`). Ultra reduces the replay window to 180s, expands nonce cache to 131,072 entries, and drops unknown SNI probes.
+- **TCP MSS Clamping (`mtproxymax clamp-mss`):** Prevents MTU black hole drops and packet fragmentation via TCP FORWARD mangle hooks `--clamp-mss-to-pmtu`.
+- **Multi-Domain SNI Pool (`mtproxymax domain-pool`):** Rotate between multiple high-reputation cover domains (`tls_domains = ["dom1.com", "dom2.com"]`) within the same engine instance to evade single-domain DPI throttling.
+- **Interactive TUI Menu:** Dedicated ASCII dashboard (`show_stealth_menu`) under Settings `[s]` and Security `[5]`.
 
 ### v1.0.10 — Executive Digest, DC Latency Benchmark, Base64 Subscriptions & Bulk Tools
 
