@@ -90,6 +90,8 @@ mtproxymax status    # Check proxy health
 
 Your proxy traffic looks identical to normal HTTPS traffic. The **Fake TLS V2** engine mirrors real TLS 1.3 sessions — per-domain profiles, real cipher suites, dynamic certificate lengths, and realistic record fragmentation. The TLS handshake SNI points to a cover domain (e.g., `cloudflare.com`), making it indistinguishable from regular web browsing to any DPI system.
 
+- **Auto Certificate Length Sync:** MTProxyMax automatically connects to your configured cover domain (`tls_domain`) every 24 hours via OpenSSL, measures the actual live DER certificate payload size, and dynamically synchronizes `fake_cert_len`. This completely prevents advanced DPI active heuristics from fingerprinting your proxy based on static certificate sizes.
+
 **Traffic masking** goes further — when a non-Telegram client probes your server, the connection is forwarded to the real cover domain. Your server responds exactly like cloudflare.com would.
 
 ---

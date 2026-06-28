@@ -578,6 +578,55 @@ validate_domain() {
     [[ "$d" =~ ^[a-zA-Z0-9.-]+$ ]] && [[ "$d" =~ \. ]]
 }
 
+# Detect remote TLS certificate DER payload length using openssl
+detect_remote_cert_len() {
+    local domain="$1"
+    [ -z "$domain" ] && return 1
+    if ! command -v openssl >/dev/null 2>&1; then return 1; fi
+    local len
+    len=$(echo -n | timeout 5 openssl s_client -connect "${domain}:443" -servername "${domain}" 2>/dev/null | openssl x509 -outform DER 2>/dev/null | wc -c)
+    if [[ "$len" =~ ^[0-9]+$ ]] && [ "$len" -ge 256 ] && [ "$len" -le 16384 ]; then
+        echo "$len"
+        return 0
+    fi
+    return 1
+}
+
+# Automatically sync FAKE_CERT_LEN with target PROXY_DOMAIN cert length
+sync_domain_cert_len() {
+    local force="${1:-false}" quiet="${2:-false}"
+    [ -z "${PROXY_DOMAIN:-}" ] && return 0
+    
+    local stamp_file="${INSTALL_DIR}/.last_cert_sync"
+    local now_s; now_s=$(date +%s)
+    if [ "$force" != "true" ] && [ -f "$stamp_file" ]; then
+        local last_s; last_s=$(cat "$stamp_file" 2>/dev/null)
+        if [[ "$last_s" =~ ^[0-9]+$ ]]; then
+            # Run at most once every 24 hours (86400 seconds)
+            if [ $((now_s - last_s)) -lt 86400 ]; then
+                return 0
+            fi
+        fi
+    fi
+
+    local detected
+    if detected=$(detect_remote_cert_len "$PROXY_DOMAIN"); then
+        mkdir -p "$INSTALL_DIR" 2>/dev/null || true
+        echo "$now_s" > "$stamp_file" 2>/dev/null || true
+        if [ "$detected" != "${FAKE_CERT_LEN:-2048}" ]; then
+            if [ "$quiet" = "false" ]; then
+                log_info "Auto-detected TLS cert length for '${PROXY_DOMAIN}': ${detected} bytes (was ${FAKE_CERT_LEN:-2048})"
+            fi
+            FAKE_CERT_LEN="$detected"
+            save_settings
+            if is_proxy_running; then
+                reload_proxy_config
+            fi
+        fi
+    fi
+    return 0
+}
+
 # ── Section 5: Settings Persistence ──────────────────────────
 
 save_settings() {
@@ -696,7 +745,7 @@ load_settings() {
     [[ "$PROXY_PORT" =~ ^[0-9]+$ ]] && [ "$PROXY_PORT" -ge 1 ] && [ "$PROXY_PORT" -le 65535 ] || PROXY_PORT=443
     [[ "$PROXY_METRICS_PORT" =~ ^[0-9]+$ ]] && [ "$PROXY_METRICS_PORT" -ge 1 ] && [ "$PROXY_METRICS_PORT" -le 65535 ] || PROXY_METRICS_PORT=9090
     [[ "$MASKING_PORT" =~ ^[0-9]+$ ]] && [ "$MASKING_PORT" -ge 1 ] && [ "$MASKING_PORT" -le 65535 ] || MASKING_PORT=443
-    [[ "$FAKE_CERT_LEN" =~ ^[0-9]+$ ]] && [ "$FAKE_CERT_LEN" -ge 512 ] || FAKE_CERT_LEN=2048
+    [[ "$FAKE_CERT_LEN" =~ ^[0-9]+$ ]] && [ "$FAKE_CERT_LEN" -ge 256 ] || FAKE_CERT_LEN=2048
     [[ "$PROXY_CONCURRENCY" =~ ^[0-9]+$ ]] || PROXY_CONCURRENCY=8192
     [[ "$PROXY_PROTOCOL" == "true" ]] || PROXY_PROTOCOL="false"
     [[ "$GEOBLOCK_MODE" == "whitelist" ]] || GEOBLOCK_MODE="blacklist"
@@ -7650,6 +7699,9 @@ run_installer() {
         *) PROXY_DOMAIN="cloudflare.com" ;;
     esac
 
+    # Auto-detect TLS certificate length for chosen domain
+    sync_domain_cert_len "true" "false" || true
+
     # Traffic masking
     echo ""
     echo -e "  ${BOLD}Traffic masking${NC} ${DIM}(forward DPI probes to real website)${NC}"
@@ -8951,6 +9003,7 @@ cli_main() {
                     check_root
                     if validate_domain "$new_domain"; then
                         PROXY_DOMAIN="$new_domain"
+                        sync_domain_cert_len "true" "false" || true
                         save_settings
                         log_success "Domain changed to ${new_domain}"
                         audit_log "domain change → ${new_domain}"
@@ -9088,6 +9141,7 @@ cli_main() {
             load_secrets
             secret_check_quota_resets 2>/dev/null
             secret_check_auto_rotate 2>/dev/null
+            sync_domain_cert_len "false" "true" 2>/dev/null || true
             [ "${BACKUP_RETENTION_DAYS:-30}" -gt 0 ] 2>/dev/null && backup_autoclean "${BACKUP_RETENTION_DAYS}" >/dev/null 2>&1
             ;;
 
@@ -10696,6 +10750,7 @@ show_settings_menu() {
                     *) _domain_changed=false ;;
                 esac
                 if $_domain_changed; then
+                    sync_domain_cert_len "true" "false" || true
                     save_settings
                     log_success "Domain set to ${PROXY_DOMAIN}"
                     log_warn "Existing proxy links still encode the old domain"
