@@ -1019,6 +1019,7 @@ mtproxymax update                       # Check for script + engine updates
 - **Stealth Presets (`mtproxymax stealth`):** Hot-swappable anti-replay hardening (`normal` vs `ultra`). Ultra reduces the replay window to 180s, expands nonce cache to 131,072 entries, and drops unknown SNI probes.
 - **TCP MSS Clamping (`mtproxymax clamp-mss`):** Prevents MTU black hole drops and packet fragmentation via TCP FORWARD mangle hooks `--clamp-mss-to-pmtu`.
 - **Multi-Domain SNI Pool (`mtproxymax domain-pool`):** Rotate between multiple high-reputation cover domains (`tls_domains = ["dom1.com", "dom2.com"]`) within the same engine instance to evade single-domain DPI throttling.
+- **Auto Cert Synchronization (`sync_domain_cert_len`):** Connects to cover domain every 24h via OpenSSL, measures live DER payload size, and dynamically synchronizes `fake_cert_len` to evade static certificate heuristics.
 - **Interactive TUI Menu:** Dedicated ASCII dashboard (`show_stealth_menu`) under Settings `[s]` and Security `[5]`.
 
 ### v1.0.10 — Executive Digest, DC Latency Benchmark, Base64 Subscriptions & Bulk Tools
